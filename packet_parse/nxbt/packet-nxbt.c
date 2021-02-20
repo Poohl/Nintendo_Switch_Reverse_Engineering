@@ -1,12 +1,15 @@
 
 #include <config.h>
 #include <epan/packet.h>
+#include <stdio.h>
 
 #define NAMES_END { 0x00, NULL }
 
 // "this" as handles
 static int proto_nxbt = -1;
 static gint ett_nxbt = -1;
+
+//static dissector_table_t mcu_dissector_table;
 
 // handles for all fields in the protocoll
 
@@ -20,26 +23,45 @@ static gint ett_nxbt = -1;
  * - don't fuck up the cursor
  */
 
+#define NEW_FIELD(HANDLE, NAME, ABBREV, TYPE, DISPLAY, VALUE_NAMES, BITMASK, DESC) \
+    static int HANDLE = -1; \
+    static const hf_register_info HANDLE ## _register = { \
+        &HANDLE, \
+        { \
+            NAME, ABBREV, \
+            TYPE, DISPLAY, \
+            VALUE_NAMES, BITMASK, \
+            DESC, HFILL \
+        } \
+    }
+
+#define NEW_NUMBER_FIELD(HANDLE, NAME, ABBREV, TYPE, DISPLAY) \
+    NEW_FIELD(HANDLE, NAME, ABBREV, TYPE, DISPLAY, NULL, 0x0, NULL)
+
+#define NEW_STRING_FIELD(HANDLE, NAME, ABBREV, TYPE, STRINGS) \
+    NEW_FIELD(HANDLE, NAME, ABBREV, TYPE, BASE_HEX, VALS(STRINGS), 0x0, NULL)
+
+#define NEW_NONE_FIELD(HANDLE, NAME, ABBREV) \
+    NEW_FIELD(HANDLE, NAME, ABBREV, FT_NONE, ENC_NA, NULL, 0x0, NULL)
+
+#define NEW_BYTES_FIELD(HANDLE, NAME, ABBREV) \
+    NEW_FIELD(HANDLE, NAME, ABBREV, FT_BYTES, SEP_SPACE, NULL, 0x0, NULL)
+
+#define NEW_FLAG_FIELD(HANDLE, NAME, ABBREV, TOTAL_BITS, STRINGS, MASK) \
+    NEW_FIELD(HANDLE, NAME, ABBREV, FT_BOOLEAN, TOTAL_BITS, TFS(&STRINGS), MASK, NULL)
+
+#define NEW_MASKED_NUMBER_FIELD(HANDLE, NAME, ABBREV, TYPE, DISPLAY, MASK) \
+    NEW_FIELD(HANDLE, NAME, ABBREV, TYPE, DISPLAY, NULL, MASK, NULL)
+
 
 // general header
-static int hf_nxbt_direction = -1;
 static const value_string direction_type_names[] = {
   { 0xa2, "Output" },
   { 0xa1, "Input"},
   NAMES_END
 };
-#define hf_nxbt_direction_register \
-{ \
-  &hf_nxbt_direction, \
-  { \
-    "first byte", "nxbt.first", \
-    FT_UINT8, BASE_HEX, \
-    VALS(direction_type_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(hf_nxbt_direction, "first byte", "nxbt.first", FT_UINT8, direction_type_names);
 
-static int hf_nxbt_type = -1;
 static const value_string type_names[] = {
   // Output types
     { 0x01, "Rumble and subc" },
@@ -58,62 +80,18 @@ static const value_string type_names[] = {
     { 0x3F, "Pure BT HID"},
     NAMES_END
 };
-#define hf_nxbt_type_register { \
-  &hf_nxbt_type, \
-  { \
-    "Report type", "nxbt.type", \
-    FT_UINT8, BASE_HEX, \
-    VALS(type_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(hf_nxbt_type, "Report type", "nxbt.type", FT_UINT8, type_names);
 
-static int hf_nxbt_timer = -1;
-#define hf_nxbt_timer_register { \
-  &hf_nxbt_timer, \
-  { \
-    "timer", "nxbt.timer", \
-    FT_UINT8, BASE_HEX, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(hf_nxbt_timer, "timer", "nxbt.timer", FT_UINT8, BASE_HEX);
 
 
 //rumble stuff
-static int nxbt_rumble = -1;
+NEW_NONE_FIELD(nxbt_rumble, "Rumble data", "nxbt.rumble");
 static int nxbt_rumble_tree = -1;
-#define nxbt_rumble_register { \
-  &nxbt_rumble, \
-  { \
-    "Rumble data", "nxbt.rumble", \
-    FT_NONE, ENC_NA, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
 
-static int nxbt_rumble_left = -1;
-#define nxbt_rumble_left_register { \
-  &nxbt_rumble_left, \
-  { \
-    "Left rumble", "nxbt.rumble.left", \
-    FT_UINT32, BASE_HEX, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_rumble_left, "Left rumble", "nxbt.rumble.left", FT_UINT32, BASE_HEX);
 
-static int nxbt_rumble_right = -1;
-#define nxbt_rumble_right_register { \
-  &nxbt_rumble_right, \
-  { \
-    "Right rumble", "nxbt.rumble.right", \
-    FT_UINT32, BASE_HEX, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_rumble_right, "Left rumble", "nxbt.rumble.right", FT_UINT32, BASE_HEX);
 
 static int dissect_nxbt_rumble(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* nxbt_tree _U_, void* data _U_, uint cursor) {
   proto_item* rumble_item = proto_tree_add_none_format(nxbt_tree, nxbt_rumble, tvb, cursor, 8, "Rumble data");
@@ -126,38 +104,11 @@ static int dissect_nxbt_rumble(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree
 }
 
 //spi stuff
-static int nxbt_spi_address = -1;
-#define nxbt_spi_address_register { \
-  &nxbt_spi_address, \
-  { \
-    "Address", "nxbt.sub.spi.address", \
-    FT_UINT32, BASE_HEX, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_spi_address, "Address", "nxbt.sub.spi.address", FT_UINT32, BASE_HEX);
 
-static int nxbt_spi_length = -1;
-#define nxbt_spi_length_register { \
-  &nxbt_spi_length, \
-  { \
-    "Amount", "nxbt.sub.spi.length", \
-    FT_UINT8, BASE_DEC, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_spi_length, "Amount", "nxbt.sub.spi.length", FT_UINT8, BASE_DEC);
 
-static int nxbt_spi_data = -1;
-#define nxbt_spi_data_register { \
-  &nxbt_spi_data, \
-  { \
-    "data", "nxbt.sub.spi.data", \
-    FT_BYTES, SEP_SPACE, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_BYTES_FIELD(nxbt_spi_data, "data", "nxbt.sub.spi.data");
 
 static int dissect_nxbt_spi(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* tree _U_, void* data _U_, uint cursor, char has_data) {
   proto_tree_add_item(tree, nxbt_spi_address, tvb, cursor, 4, ENC_LITTLE_ENDIAN);
@@ -173,19 +124,9 @@ static int dissect_nxbt_spi(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* t
 
 
 // subcommands
-static int nxbt_subc = -1;
+NEW_NONE_FIELD(nxbt_subc, "Subcommand", "nxbt.sub");
 static int nxbt_subc_tree = -1;
-#define nxbt_subc_register { \
-  &nxbt_subc, \
-  { \
-    "Subcommand", "nxbt.sub", \
-    FT_NONE, ENC_NA, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
 
-static int nxbt_subc_c = -1;
 static const value_string nxbt_subc_c_names[] = {
   { 0x01, "Manual Pairing"},
   { 0x02, "Get device info"},
@@ -220,69 +161,34 @@ static const value_string nxbt_subc_c_names[] = {
   { 0x52, "Get GPIO Pin Input/Output value"},
   NAMES_END
 };
-#define nxbt_subc_c_register { \
-  &nxbt_subc_c, \
-  { \
-    "Subcommand", "nxbt.sub.c", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_subc_c_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_subc_c, "Subcommand", "nxbt.sub.c", FT_UINT8, nxbt_subc_c_names);
 
 // set mcu config
-static int nxbt_subc_mcu_config = -1;
-#define nxbt_subc_mcu_config_register { \
-  &nxbt_subc_mcu_config, \
-  { \
-    "Powerstate configuration", "nxbt.sub.mcu.config", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_mcu_power_state_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+static const value_string nxbt_mcu_power_state_names[] = {
+  { 0x00, "Suspended" },
+  { 0x01, "Ready" },
+  { 0x02, "Ready for Update" },
+  { 0x04, "Configured NFC" },
+  { 0x05, "Configured IR" },
+  { 0x06, "Configured Update" },
+  NAMES_END
+};
+NEW_STRING_FIELD(nxbt_subc_mcu_config, "Powerstate configuration", "nxbt.sub.mcu.config", FT_UINT8, nxbt_mcu_power_state_names);
 
 //set mcu state
-static int nxbt_subc_MCU_state = -1;
 static const value_string mcu_state_names[] = {
   { 0x00, "Suspended"},
   { 0x01, "Active"},
   { 0x02, "Active for Update"},
   NAMES_END
 };
-#define nxbt_subc_MCU_state_register { \
-  &nxbt_subc_MCU_state, \
-  { \
-    "State to go into", "nxbt.sub.mcu.state", \
-    FT_UINT8, BASE_DEC, \
-    VALS(mcu_state_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_subc_MCU_state, "State to go into", "nxbt.sub.mcu.state", FT_UINT8, mcu_state_names);
 
 //set player lights
-static int nxbt_subc_player_lights = -1;
-#define nxbt_subc_player_lights_register { \
-  &nxbt_subc_player_lights, \
-  { \
-    "Player Lights", "nxbt.sub.player", \
-    FT_UINT8, BASE_OCT, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_subc_player_lights, "Player Lights", "nxbt.sub.player", FT_UINT8, BASE_OCT);
 
 //set input report type
-static int nxbt_subc_type = -1;
-#define nxbt_subc_type_register { \
-  &nxbt_subc_type, \
-  { \
-    "Report type to switch to", "nxbt.sub.type", \
-    FT_UINT8, BASE_HEX, \
-    VALS(type_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_subc_type, "Report type to switch to", "nxbt.sub.type", FT_UINT8, type_names);
 
 static int dissect_nxbt_subc(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* nxbt_tree _U_, void* data _U_, uint cursor) {
   uint start = cursor;
@@ -320,56 +226,20 @@ static int dissect_nxbt_subc(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* 
 
 
 // subcommand replies
-static int nxbt_rep = -1;
+NEW_NONE_FIELD(nxbt_rep, "Subcommand Reply", "nxbt.rep");
 static int nxbt_rep_tree = -1;
-#define nxbt_rep_register { \
-  &nxbt_rep, \
-  { \
-    "Subcommand Reply", "nxbt.rep", \
-    FT_NONE, ENC_NA, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
 
 #define NXBT_REP_ACK_FLAG (1 << 7)
-static int nxbt_rep_ack = -1;
 static const true_false_string nxbt_rep_ack_names = {
     "ACK",
     "NACK"
 };
-#define nxbt_rep_ack_register { \
-  &nxbt_rep_ack, \
-  { \
-    "ack flag", "nxbt.rep.ack", \
-    FT_BOOLEAN, 8, \
-    TFS(&nxbt_rep_ack_names), NXBT_REP_ACK_FLAG, \
-    NULL, HFILL \
-  } \
-}
+NEW_FLAG_FIELD(nxbt_rep_ack, "ack flag", "nxbt.rep.ack", 8, nxbt_rep_ack_names, NXBT_REP_ACK_FLAG);
 
 #define NXBT_REP_DTYPE_MASK ((guint8) ~NXBT_REP_ACK_FLAG)
-static int nxbt_rep_dtype = -1;
-#define nxbt_rep_dtype_register { \
-  &nxbt_rep_dtype, \
-  { \
-    "reply dtype", "nxbt.rep.dtype", \
-    FT_UINT8, BASE_HEX, \
-    NULL, NXBT_REP_DTYPE_MASK, \
-    NULL, HFILL \
-  } \
-}
+NEW_MASKED_NUMBER_FIELD(nxbt_rep_dtype, "reply dtype", "nxbt.rep.dtype", FT_UINT8, BASE_HEX, NXBT_REP_DTYPE_MASK);
 
-static int nxbt_rep_subc = -1;
-#define nxbt_rep_subc_register { \
-  &nxbt_rep_subc, \
-  { \
-    "response to", "nxbt.rep.sub", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_subc_c_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_rep_subc, "response to", "nxbt.rep.sub", FT_UINT8, nxbt_subc_c_names);
 
 static int dissect_nxbt_subc_reply(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* nxbt_tree _U_, void* data _U_, uint cursor) {
   guint8 ack = tvb_get_guint8(tvb, cursor) & NXBT_REP_ACK_FLAG;
@@ -395,36 +265,17 @@ static int dissect_nxbt_subc_reply(tvbuff_t* tvb, packet_info* pinfo _U_, proto_
 
 
 // General MCU stuff
-static int nxbt_mcu = -1;
+NEW_NONE_FIELD(nxbt_mcu, "MCU Data", "nxbt.mcu");
 static int nxbt_mcu_tree = -1;
-#define nxbt_mcu_register { \
-  &nxbt_mcu, \
-  { \
-    "MCU Data", "nxbt.mcu", \
-    FT_NONE, ENC_NA, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
 
 // command and first are identical just on different sides
-static int nxbt_mcu_c = -1;
 static const value_string nxbt_mcu_c_names[] = {
   {0x01, "Status request"},
   {0x02, "NFC subsubcommand"},
   NAMES_END
 };
-#define nxbt_mcu_c_register { \
-  &nxbt_mcu_c, \
-  { \
-    "command", "nxbt.mcu.c", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_mcu_c_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_mcu_c, "command", "nxbt.mcu.c", FT_UINT8, nxbt_mcu_c_names);
 
-static int nxbt_mcu_first = -1;
 static const value_string nxbt_mcu_first_names[] = {
   {0x01, "MCU status"},
   {0x2a, "NFC status"},
@@ -432,79 +283,26 @@ static const value_string nxbt_mcu_first_names[] = {
   {0xff, "No response/MCU disables"},
   NAMES_END
 };
-#define nxbt_mcu_first_register { \
-  &nxbt_mcu_first, \
-  { \
-    "type of MCU message", "nxbt.mcu.first", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_mcu_first_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_mcu_first, "type of MCU message", "nxbt.mcu.first", FT_UINT8, nxbt_mcu_first_names);
 
-static int nxbt_mcu_seqno = -1;
-#define nxbt_mcu_seqno_register { \
-  &nxbt_mcu_seqno, \
-  { \
-    "Sequence no", "nxbt.mcu.seq", \
-    FT_UINT8, BASE_DEC, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_mcu_seqno, "Sequence no", "nxbt.mcu.seq", FT_UINT8, BASE_DEC);
 
-static int nxbt_mcu_ackseqno = -1;
-#define nxbt_mcu_ackseqno_register { \
-  &nxbt_mcu_ackseqno, \
-  { \
-    "[ack-seqno]", "nxbt.mcu.ackseqno", \
-    FT_UINT8, BASE_DEC, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_mcu_ackseqno, "[ack-seqno]", "nxbt.mcu.ackseqno", FT_UINT8, BASE_DEC);
 
 #define NXBT_MCUC_EOT_FLAG 0x08
-static int nxbt_mcu_eot = -1;
 static const true_false_string nxbt_mcu_eot_names = {
     "EOT",
     "MORE"
 };
-#define nxbt_mcu_eot_register { \
-  &nxbt_mcu_eot, \
-  { \
-    "eot flag", "nxbt.mcu.eot", \
-    FT_BOOLEAN, 8, \
-    TFS(&nxbt_mcu_eot_names), NXBT_MCUC_EOT_FLAG, \
-    NULL, HFILL \
-  } \
-}
+NEW_FLAG_FIELD(nxbt_mcu_eot, "eot flag", "nxbt.mcu.eot", 8, nxbt_mcu_eot_names, NXBT_MCUC_EOT_FLAG);
 
-static int nxbt_mcu_payload_len = -1;
-#define nxbt_mcu_payload_len_register { \
-  &nxbt_mcu_payload_len, \
-  { \
-    "Payload_length", "nxbt.mcu.data.len", \
-    FT_UINT8, BASE_DEC, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_mcu_payload_len, "Payload_length", "nxbt.mcu.data.len", FT_UINT8, BASE_DEC);
 
-static int nxbt_mcu_crc = -1;
-#define nxbt_mcu_crc_register { \
-  &nxbt_mcu_crc, \
-  { \
-    "MCU crc", "nxbt.mcu.crc", \
-    FT_UINT8, BASE_HEX, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_mcu_crc, "MCU crc", "nxbt.mcu.crc", FT_UINT8, BASE_HEX);
 
+NEW_BYTES_FIELD(nxbt_mcu_nfc_uuid, "UUID of tag", "nxbt.mcu.nfc.uuid");
 
 // MCU out
-static int nxbt_mcu_nfcc = -1;
 static const value_string nxbt_mcu_nfcc_names[] = {
   {0x01, "Start Polling"},
   {0x02, "Stop Polling"},
@@ -514,15 +312,7 @@ static const value_string nxbt_mcu_nfcc_names[] = {
   {0x0f, "Read mifare data"},
   NAMES_END
 };
-#define nxbt_mcu_nfcc_register { \
-  &nxbt_mcu_nfcc, \
-  { \
-    "Subcommand for NFC", "nxbt.mcu.nfc.c", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_mcu_nfcc_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_mcu_nfcc, "Subcommand for NFC", "nxbt.mcu.nfc.c", FT_UINT8, nxbt_mcu_nfcc_names);
 
 static int counter = 1;
 
@@ -553,31 +343,12 @@ static int dissect_nxbt_mcu_out(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tre
 
 
 // MCU in
-static int nxbt_mcu_power_state = -1;
-static const value_string nxbt_mcu_power_state_names[] = {
-  { 0x00, "Suspended" },
-  { 0x01, "Ready" },
-  { 0x02, "Ready for Update" },
-  { 0x04, "Configured NFC" },
-  { 0x05, "Configured IR" },
-  { 0x06, "Configured Update" },
-  NAMES_END
-};
-#define nxbt_mcu_power_state_register { \
-  &nxbt_mcu_power_state, \
-  { \
-    "MCU's powerstate", "nxbt.mcu.state", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_mcu_power_state_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_mcu_power_state, "MCU's powerstate", "nxbt.mcu.state", FT_UINT8, nxbt_mcu_nfcc_names);
 
 //static int nxbt_mcu_error = -1;
 
 //static int nxbt_mcu_nfc_type = -1;
 
-static int nxbt_mcu_nfc_state = -1;
 static const value_string nxbt_mcu_nfc_state_names[] = {
   { 0x00, "None" },
   { 0x01, "Polled" },
@@ -586,37 +357,13 @@ static const value_string nxbt_mcu_nfc_state_names[] = {
   { 0x09, "Polled, found tag again" },
   NAMES_END
 };
-#define nxbt_mcu_nfc_state_register { \
-  &nxbt_mcu_nfc_state, \
-  { \
-    "NFC subsystem state", "nxbt.mcu.nfc.state", \
-    FT_UINT8, BASE_HEX, \
-    VALS(nxbt_mcu_nfc_state_names), 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_STRING_FIELD(nxbt_mcu_nfc_state, "NFC subsystem state", "nxbt.mcu.nfc.state", FT_UINT8, nxbt_mcu_nfc_state_names);
 
-static int nxbt_mcu_nfc_uuid = -1;
-#define nxbt_mcu_nfc_uuid_register { \
-  &nxbt_mcu_nfc_uuid, \
-  { \
-    "UUID of detected tag", "nxbt.mcu.nfc.uuid", \
-    FT_BYTES, SEP_COLON, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NUMBER_FIELD(nxbt_mcu_nfc_unknown_len, "Unknown NFC data length", "nxbt.mcu.nfc.unknown.len", FT_UINT8, BASE_DEC);
 
-static int nxbt_mcu_nfc_data = -1;
-#define nxbt_mcu_nfc_data_register { \
-  &nxbt_mcu_nfc_data, \
-  { \
-    "Nfc tag data transmitted", "nxbt.mcu.nfc.data", \
-    FT_NONE, ENC_NA, \
-    NULL, 0x0, \
-    NULL, HFILL \
-  } \
-}
+NEW_NONE_FIELD(nxbt_mcu_nfc_unknown_data, "Unknown NFC data", "nxbt.mcu.nfc.unknown");
+
+NEW_NONE_FIELD(nxbt_mcu_nfc_data, "Nfc tag data transmitted", "nxbt.mcu.nfc.data");
 
 static int dissect_nxbt_mcu_in(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* nxbt_tree _U_, void* data _U_, uint cursor) {
   proto_item* mcu_item = proto_tree_add_none_format(nxbt_tree, nxbt_mcu, tvb, cursor, 313,
@@ -781,13 +528,14 @@ void proto_register_nxbt(void) {
     &nxbt_mcu_tree,
     &nxbt_rep_tree,
   };
-
+  printf("registered nxbt dissector\n");
 	proto_nxbt = proto_register_protocol(
 		"Nintendo Switch Bluetooth Controller Kommunikation",
 		"NX_BT",
 		"nxbt"
 	);
 
+  register_dissector("nxbt", dissect_nxbt, proto_nxbt);
   proto_register_field_array(proto_nxbt, hf, array_length(hf));
   proto_register_subtree_array(ett, array_length(ett));
 }
@@ -800,5 +548,8 @@ void proto_reg_handoff_nxbt(void) {
 	//dissector_add_uint("llc.bluetooth_pid", 1, nxbl_handle); // overwrite L2CAP
 	dissector_add_uint("btl2cap.psm", 17, nxbt_handle);
 	dissector_add_uint("btl2cap.psm", 19, nxbt_handle);
+  dissector_add_uint("wtap_encap", 45, nxbt_handle);
+  /*udp_dissector_table = register_dissector_table("nxbt.mcu",
+                                                 "Communication to the MCU", proto_nxbt, FT_UINT16, BASE_DEC);*/
 	//dissector_add_for_decode_as("btl2cap.cid", nxbt_handle);
 }
