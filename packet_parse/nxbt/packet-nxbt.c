@@ -300,7 +300,7 @@ NEW_NUMBER_FIELD(nxbt_mcu_payload_len, "Payload_length", "nxbt.mcu.data.len", FT
 
 NEW_NUMBER_FIELD(nxbt_mcu_crc, "MCU crc", "nxbt.mcu.crc", FT_UINT8, BASE_HEX);
 
-NEW_BYTES_FIELD(nxbt_mcu_nfc_uuid, "UUID of tag", "nxbt.mcu.nfc.uuid");
+NEW_BYTES_FIELD(nxbt_mcu_nfc_uuid, "UUID of tag (0 is )", "nxbt.mcu.nfc.uuid");
 
 // MCU out
 static const value_string nxbt_mcu_nfcc_names[] = {
@@ -313,8 +313,6 @@ static const value_string nxbt_mcu_nfcc_names[] = {
   NAMES_END
 };
 NEW_STRING_FIELD(nxbt_mcu_nfcc, "Subcommand for NFC", "nxbt.mcu.nfc.c", FT_UINT8, nxbt_mcu_nfcc_names);
-
-static int counter = 1;
 
 static int dissect_nxbt_mcu_out(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree* nxbt_tree _U_, void* data _U_, uint cursor) {
   uint start = cursor;
@@ -330,10 +328,11 @@ static int dissect_nxbt_mcu_out(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tre
     proto_tree_add_item(mcu_tree, nxbt_mcu_eot, tvb, cursor++, 1, ENC_BIG_ENDIAN);
     //guint8 payload_len = tvb_get_guint8(tvb, cursor);
     proto_tree_add_item(mcu_tree, nxbt_mcu_payload_len, tvb, cursor++, 1, ENC_BIG_ENDIAN);
+    proto_tree_add_item(mcu_tree, nxbt_mcu_nfc_uuid, tvb, cursor + 2, 7, ENC_BIG_ENDIAN);
     //cursor += payload_len;
     cursor += 31;
     proto_tree_add_item(mcu_tree, nxbt_mcu_crc, tvb, cursor++, 1, ENC_BIG_ENDIAN);
-    col_add_fstr(pinfo->cinfo, COL_INFO, "MCU-NFC command %s %d", val_to_str(nfcc, nxbt_mcu_nfcc_names, "unknown 0x%02x"), ++counter);
+    col_add_fstr(pinfo->cinfo, COL_INFO, "MCU-NFC command %s", val_to_str(nfcc, nxbt_mcu_nfcc_names, "unknown 0x%02x"));
   } else {
     col_add_fstr(pinfo->cinfo, COL_INFO, "MCU command %s", val_to_str(mcu_c, nxbt_mcu_c_names, "unknown 0x%02x"));
   }
@@ -354,14 +353,15 @@ static const value_string nxbt_mcu_nfc_state_names[] = {
   { 0x01, "Polled" },
   { 0x02, "Buffered data / Pending read" },
   { 0x03, "[Writing]"},
+  { 0x05, "[Processing Write]"},
   { 0x09, "Polled, found tag again" },
   NAMES_END
 };
 NEW_STRING_FIELD(nxbt_mcu_nfc_state, "NFC subsystem state", "nxbt.mcu.nfc.state", FT_UINT8, nxbt_mcu_nfc_state_names);
 
-NEW_NUMBER_FIELD(nxbt_mcu_nfc_unknown_len, "Unknown NFC data length", "nxbt.mcu.nfc.unknown.len", FT_UINT8, BASE_DEC);
+//NEW_NUMBER_FIELD(nxbt_mcu_nfc_unknown_len, "Unknown NFC data length", "nxbt.mcu.nfc.unknown.len", FT_UINT8, BASE_DEC);
 
-NEW_NONE_FIELD(nxbt_mcu_nfc_unknown_data, "Unknown NFC data", "nxbt.mcu.nfc.unknown");
+//NEW_NONE_FIELD(nxbt_mcu_nfc_unknown_data, "Unknown NFC data", "nxbt.mcu.nfc.unknown");
 
 NEW_NONE_FIELD(nxbt_mcu_nfc_data, "Nfc tag data transmitted", "nxbt.mcu.nfc.data");
 
@@ -385,7 +385,8 @@ static int dissect_nxbt_mcu_in(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree
       cursor += 2;
       proto_tree_add_item(mcu_tree, nxbt_mcu_seqno, tvb, cursor++, 1, ENC_BIG_ENDIAN);
       proto_tree_add_item(mcu_tree, nxbt_mcu_ackseqno, tvb, cursor++, 1, ENC_BIG_ENDIAN);
-      cursor += 2;
+      proto_tree_add_item(mcu_tree, nxbt_mcu_eot, tvb, cursor++, 1, ENC_BIG_ENDIAN);
+      cursor += 1;
       proto_tree_add_item(mcu_tree, nxbt_mcu_nfc_state, tvb, cursor++, 1, ENC_BIG_ENDIAN);
       cursor += 7;
       payload_len = tvb_get_guint8(tvb, cursor);
@@ -400,8 +401,9 @@ static int dissect_nxbt_mcu_in(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree
       seqno = tvb_get_guint8(tvb, cursor);
       proto_tree_add_item(mcu_tree, nxbt_mcu_seqno, tvb, cursor++, 1, ENC_BIG_ENDIAN);
       proto_tree_add_item(mcu_tree, nxbt_mcu_ackseqno, tvb, cursor++, 1, ENC_BIG_ENDIAN);
+      proto_tree_add_item(mcu_tree, nxbt_mcu_eot, tvb, cursor++, 1, ENC_BIG_ENDIAN);
       if (seqno == 1) {
-        cursor += 2;
+        cursor += 1;
         proto_tree_add_item(mcu_tree, nxbt_mcu_nfc_state, tvb, cursor++, 1, ENC_BIG_ENDIAN);
         cursor += 6;
         proto_tree_add_item(mcu_tree, nxbt_mcu_payload_len, tvb, cursor++, 1, ENC_BIG_ENDIAN);
@@ -412,10 +414,10 @@ static int dissect_nxbt_mcu_in(tvbuff_t* tvb, packet_info* pinfo _U_, proto_tree
         cursor += 245;
         col_set_str(pinfo->cinfo, COL_INFO, "NFC read buffered data #1");
       } else if (seqno == 2) {
-        cursor += 5;
+        cursor += 1;
         proto_tree_add_none_format(mcu_tree, nxbt_mcu_nfc_data, tvb, cursor, 295, "Raw NFC tag data");
         cursor += 295;
-        cursor += 7;
+        cursor += 11;
         col_set_str(pinfo->cinfo, COL_INFO, "NFC read buffered data #2");
       }
       break;
